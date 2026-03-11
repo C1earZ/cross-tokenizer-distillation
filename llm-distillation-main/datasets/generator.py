@@ -112,6 +112,11 @@ if __name__ == "__main__":
     dataset = dataset.map(lambda items: tokenization(items, tokenizer=tokenizer), batched=True, batch_size=args.batch_size)
     print(args.model_id)
     print(dataset['prompt'][0])
+    # [fix] 在 set_format 之前备份非 tensor 字段，避免 set_format 后无法访问
+    answers_backup = dataset['answers']
+    context_backup = dataset['context']
+    question_backup = dataset['question'] if 'question' in dataset.column_names else None
+    title_backup = dataset['title'] if has_title else None
     dataset.set_format(type="torch", columns=["input_ids", "attention_mask"])
     dataloader = DataLoader(dataset, batch_size=args.batch_size, num_workers=args.num_workers)
     logging.info('Dataset processed...')
@@ -137,30 +142,39 @@ if __name__ == "__main__":
     logging.info('Predictions finished')
 
     logging.info('Saving dataset...')
-    if isinstance(dataset['answers'][0], dict): answers = [item[args.mapping_dict] for item in dataset['answers']]
-    elif isinstance(dataset['answers'][0][0], dict): answers = [item[0][args.mapping_dict] for item in dataset['answers']]
-    else: answers = dataset['answers']
+    # [fix] 使用备份的字段代替 dataset['answers']，因为 set_format 后原字段不可访问
+    # --- 原代码 start ---
+    # if isinstance(dataset['answers'][0], dict): answers = [item[args.mapping_dict] for item in dataset['answers']]
+    # elif isinstance(dataset['answers'][0][0], dict): answers = [item[0][args.mapping_dict] for item in dataset['answers']]
+    # else: answers = dataset['answers']
+    # --- 原代码 end ---
+    if isinstance(answers_backup[0], dict): answers = [item[args.mapping_dict] for item in answers_backup]
+    elif isinstance(answers_backup[0][0], dict): answers = [item[0][args.mapping_dict] for item in answers_backup]
+    else: answers = answers_backup
 
     if args.task.startswith("qa"):
         if has_title:
             dataset_generated = Dataset.from_dict({
-                'title': dataset['title'],
-                'context': dataset['context'],
-                'question': dataset['question'],
-                'answers': dataset['answers'],
+                # [fix] 使用备份字段
+                'title': title_backup,
+                'context': context_backup,
+                'question': question_backup,
+                'answers': answers_backup,
                 'answers_generated': list(chain(*predictions))
             })
         else:
             dataset_generated = Dataset.from_dict({
-                'context': dataset['context'],
-                'question': dataset['question'],
-                'answers': dataset['answers'],
+                # [fix] 使用备份字段
+                'context': context_backup,
+                'question': question_backup,
+                'answers': answers_backup,
                 'answers_generated': list(chain(*predictions))
             })
     if args.task.startswith("summary"):
         dataset_generated = Dataset.from_dict({
-            'context': dataset['context'],
-            'summary': dataset['answers'],
+            # [fix] 使用备份字段
+            'context': context_backup,
+            'summary': answers_backup,
             'summary_generated': list(chain(*predictions))
         })
 
