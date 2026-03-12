@@ -113,10 +113,15 @@ if __name__ == "__main__":
     print(args.model_id)
     print(dataset['prompt'][0])
     # [fix] 在 set_format 之前备份非 tensor 字段，避免 set_format 后访问极慢或不可用
-    context_backup = dataset['context']
-    question_backup = dataset['question'] if 'question' in dataset.column_names else None
-    answers_backup = dataset['answers'] if 'answers' in dataset.column_names else None
-    title_backup = dataset['title'] if has_title else None
+    # context_backup = dataset['context']
+    # question_backup = dataset['question'] if 'question' in dataset.column_names else None
+    # answers_backup = dataset['answers'] if 'answers' in dataset.column_names else None
+    # title_backup = dataset['title'] if has_title else None
+    context_backup = list(dataset['context'])
+    question_backup = list(dataset['question']) if 'question' in dataset.column_names else None
+    answers_backup = list(dataset['answers']) if 'answers' in dataset.column_names else None
+    title_backup = list(dataset['title']) if has_title else None
+
     dataset.set_format(type="torch", columns=["input_ids", "attention_mask"])
     dataloader = DataLoader(dataset, batch_size=args.batch_size, num_workers=args.num_workers)
     logging.info('Dataset processed...')
