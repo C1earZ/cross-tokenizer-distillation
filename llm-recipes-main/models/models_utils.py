@@ -15,8 +15,8 @@ from models.fsdp import fsdp_auto_wrap_policy
 from configs import fsdp_config as FSDP_CONFIG
 # 从models.distillation_model导入蒸馏模型类
 from models.distillation_model import DistillationModel
-# 从optimum.bettertransformer导入BetterTransformer（用于加速）
-from optimum.bettertransformer import BetterTransformer
+# BetterTransformer 已被 PyTorch 2.x 内置的 SDPA 取代，不再需要 optimum
+# from optimum.bettertransformer import BetterTransformer
 # 从transformers导入自动因果语言模型、MT5条件生成模型和分词器
 from transformers import AutoModelForCausalLM, MT5ForConditionalGeneration, AutoTokenizer
 # 从configs.configs_utils导入PEFT配置生成和配置更新函数
@@ -117,7 +117,7 @@ def load_model(train_config, rank):
             Flash Attention或Xformer内存高效内核
             基于使用的硬件。这将加速微调。
             """
-            model = BetterTransformer.transform(model)
+            pass  # BetterTransformer 已被 PyTorch 2.x SDPA 取代，无需转换
 
     # 打印模型大小信息
     print_model_size(model, train_config, rank)
