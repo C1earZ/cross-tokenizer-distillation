@@ -148,7 +148,11 @@ cp -r datasets/generated/Llama-2-7b-chat-hf/squad/train ~/llm-distillation/datas
 
 32GB 显存可同时加载教师和学生模型，使用 `batch_size=4` 提升训练速度。
 
-> **注意**: 单卡模式下**不要**使用 `--distillation_config.pure_bf16`。该参数在单卡下会导致学生模型 logits 出现 NaN（跨词表蒸馏的 softmax + 排序 + L1 距离计算在 bf16 精度下数值不稳定）。RTX 5090 32G 显存充足，使用默认的 fp32 精度即可。
+> **注意**: 单卡模式下也**必须**加上 `--distillation_config.enable_fsdp --distillation_config.pure_bf16` 这两个参数，缺一不可。
+>
+> **原因（NaN 问题）**: HuggingFace 默认以 fp16 加载 Llama-2-7b-chat-hf。fp16 最大值只有 65504，而 Llama-2 的 logits 经常超过这个值，导致溢出变成 `inf`，进而 `softmax(inf, ...)` 产生 NaN。加上 `pure_bf16` 后，教师模型被显式转换为 bf16（最大值 3.4e38，与 fp32 相同），不会溢出。
+>
+> **为什么还要加 `enable_fsdp`**: `pure_bf16` 的转换代码在 `if train_config.enable_fsdp:` 分支内，`enable_fsdp=False` 时该分支不会执行，`pure_bf16` 单独使用没有效果。即使是单卡，也需要用 `enable_fsdp` 来触发这段转换逻辑。
 
 ```bash
 cd ~/llm-recipes
@@ -166,6 +170,8 @@ python finetuning.py \
     --output_dir ~/llm-distillation/output/pythia-410m-squad \
     --distillation \
     --distillation_config.model_name meta-llama/Llama-2-7b-chat-hf \
+    --distillation_config.enable_fsdp \
+    --distillation_config.pure_bf16 \
     --distillation_config.distil_factor 1.5 \
     --distillation_config.cross_entropy_factor 1 \
     --distillation_config.student_temperature 1 \
@@ -175,7 +181,7 @@ python finetuning.py \
 
 ### 3.2 单卡运行（其他 24G 显卡）
 
-> 同样**不使用** `--distillation_config.pure_bf16`，避免 NaN 问题。24G 显存用 fp32 + batch_size=1 可正常运行。
+> 同样**必须**加上 `--distillation_config.enable_fsdp --distillation_config.pure_bf16`，原因同上。
 
 ```bash
 cd ~/llm-recipes
@@ -193,6 +199,8 @@ python finetuning.py \
     --output_dir ~/llm-distillation/output/pythia-410m-squad \
     --distillation \
     --distillation_config.model_name meta-llama/Llama-2-7b-chat-hf \
+    --distillation_config.enable_fsdp \
+    --distillation_config.pure_bf16 \
     --distillation_config.distil_factor 1.5 \
     --distillation_config.cross_entropy_factor 1 \
     --distillation_config.student_temperature 1 \
@@ -201,8 +209,6 @@ python finetuning.py \
 ```
 
 ### 3.3 多卡 FSDP 运行（如果有多卡或单卡显存不够）
-
-> FSDP 模式下可以使用 `--distillation_config.pure_bf16`，FSDP 会正确处理 bf16 精度转换和梯度同步。
 
 ```bash
 cd ~/llm-recipes
@@ -232,7 +238,7 @@ torchrun --nproc_per_node 2 finetuning.py \
 > - RTX 5090: `batch_size_training=4` + `gradient_accumulation_steps=2` = 等效 batch_size 8
 > - 其他显卡: `batch_size_training=1` + `gradient_accumulation_steps=8` = 等效 batch_size 8
 > - `num_epochs=3`: 减少训练轮数，不追求精度
-> - `pure_bf16`: **仅在 FSDP 多卡模式下使用**。单卡模式下使用 bf16 会导致跨词表蒸馏 loss 计算产生 NaN（softmax + 排序 + L1 距离在 bf16 下数值不稳定），单卡请使用默认的 fp32 精度
+> - `distillation_config.enable_fsdp + pure_bf16`: **单卡多卡都必须加**，用于将教师模型从 fp16 转为 bf16，防止 logits 溢出导致 NaN
 > - `save_step=50`: 更频繁保存 checkpoint（数据少，总步数也少）
 
 ---
@@ -366,12 +372,12 @@ python benchmark.py \
 ### Q: 显存不足 (OOM) 怎么办？
 - Step 1（教师生成）：确保使用了 `--bfloat` 并降低 `batch_size`
 - Step 3（蒸馏训练）：将 `batch_size` 降到 1，增大 `gradient_accumulation_steps` 来弥补
-- 如果 Step 3 仍然 OOM，考虑使用多卡 FSDP（FSDP 模式下可用 `--distillation_config.pure_bf16` 进一步减少显存）
-- **注意**: 单卡模式下不要使用 `--distillation_config.pure_bf16`，会导致 NaN
+- 如果 Step 3 仍然 OOM，考虑使用多卡 FSDP
+- **已修复的 OOM 根因**（`distillation_model.py`）：教师模型参数原本 `requires_grad=True`，导致优化器为 7B 参数额外分配 momentum + variance 状态（约 56GB）。现已在 `DistillationModel.__init__` 中添加 `param.requires_grad = False` 冻结教师参数，优化器只管理学生模型参数，显存大幅节省
 
 ### Q: 训练时 loss 显示 NaN 怎么办？
-- 最常见原因：单卡模式下误用了 `--distillation_config.pure_bf16`。去掉该参数，使用默认 fp32 精度即可
-- 跨词表蒸馏涉及 softmax 概率排序和 L1 距离计算，bf16 的精度（尾数仅 7 位）不足以保证数值稳定性
+- 原因：HuggingFace 默认以 fp16 加载 Llama-2-7b-chat-hf，fp16 最大值仅 65504，教师模型 logits 超出范围后溢出为 `inf`，softmax 计算产生 NaN
+- **解决方法**：必须同时加上 `--distillation_config.enable_fsdp --distillation_config.pure_bf16`，将教师模型转为 bf16（最大值 3.4e38）。两个参数缺一不可：`pure_bf16` 执行精度转换，`enable_fsdp` 触发该转换的代码路径
 
 ### Q: HuggingFace 下载模型很慢？
 AutoDL 提供学术网络加速：
