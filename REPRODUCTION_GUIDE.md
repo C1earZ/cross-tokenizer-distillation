@@ -148,16 +148,17 @@ cp -r datasets/generated/Llama-2-7b-chat-hf/squad/train ~/llm-distillation/datas
 
 32GB 显存可同时加载教师和学生模型，使用 `batch_size=4` 提升训练速度。
 
-> **注意**: 单卡模式下也**必须**加上 `--distillation_config.enable_fsdp --distillation_config.pure_bf16` 这两个参数，缺一不可。
+> **注意**: 必须用 `torchrun --nproc_per_node 1` 启动，不能用 `python` 直接运行。原因是 `--distillation_config.enable_fsdp` 会触发分布式初始化（`dist.init_process_group`），需要 `RANK`、`LOCAL_RANK` 等环境变量，这些变量只有 `torchrun` 才会自动设置。
 >
-> **原因（NaN 问题）**: HuggingFace 默认以 fp16 加载 Llama-2-7b-chat-hf。fp16 最大值只有 65504，而 Llama-2 的 logits 经常超过这个值，导致溢出变成 `inf`，进而 `softmax(inf, ...)` 产生 NaN。加上 `pure_bf16` 后，教师模型被显式转换为 bf16（最大值 3.4e38，与 fp32 相同），不会溢出。
->
-> **为什么还要加 `enable_fsdp`**: `pure_bf16` 的转换代码在 `if train_config.enable_fsdp:` 分支内，`enable_fsdp=False` 时该分支不会执行，`pure_bf16` 单独使用没有效果。即使是单卡，也需要用 `enable_fsdp` 来触发这段转换逻辑。
+> **为什么需要 `--distillation_config.enable_fsdp --distillation_config.pure_bf16`（缺一不可）**:
+> - HuggingFace 默认以 fp16 加载 Llama-2-7b-chat-hf，fp16 最大值只有 65504，教师模型 logits 超出后溢出为 `inf`，导致 softmax 产生 NaN
+> - `pure_bf16` 将教师模型转为 bf16（最大值 3.4e38），解决溢出问题
+> - 但 `pure_bf16` 的转换代码在 `if train_config.enable_fsdp:` 分支内，必须同时加 `enable_fsdp` 才能触发
 
 ```bash
 cd ~/llm-recipes
 
-python finetuning.py \
+torchrun --nproc_per_node 1 finetuning.py \
     --model_name EleutherAI/pythia-410m-deduped \
     --dataset.file ~/llm-distillation/datasets/loader/squad.py \
     --dataset.generated_by meta-llama/Llama-2-7b-chat-hf \
@@ -181,12 +182,12 @@ python finetuning.py \
 
 ### 3.2 单卡运行（其他 24G 显卡）
 
-> 同样**必须**加上 `--distillation_config.enable_fsdp --distillation_config.pure_bf16`，原因同上。
+> 同样用 `torchrun --nproc_per_node 1` 启动，原因同上。
 
 ```bash
 cd ~/llm-recipes
 
-python finetuning.py \
+torchrun --nproc_per_node 1 finetuning.py \
     --model_name EleutherAI/pythia-410m-deduped \
     --dataset.file ~/llm-distillation/datasets/loader/squad.py \
     --dataset.generated_by meta-llama/Llama-2-7b-chat-hf \
