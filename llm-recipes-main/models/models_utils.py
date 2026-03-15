@@ -21,8 +21,9 @@ from models.distillation_model import DistillationModel
 from transformers import AutoModelForCausalLM, MT5ForConditionalGeneration, AutoTokenizer
 # 从configs.configs_utils导入PEFT配置生成和配置更新函数
 from configs.configs_utils import generate_peft_config, update_config
-# 从peft导入PEFT模型获取和INT8训练准备函数
-from peft import get_peft_model, prepare_model_for_int8_training
+# 从peft导入PEFT模型获取函数
+# 新版peft已将prepare_model_for_int8_training重命名为prepare_model_for_kbit_training
+from peft import get_peft_model, prepare_model_for_kbit_training as prepare_model_for_int8_training
 # 从transformers导入各种模型的解码器层类
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer
 from transformers.models.gpt_neox.modeling_gpt_neox import GPTNeoXLayer
