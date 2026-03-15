@@ -39,6 +39,10 @@ class DistillationModel(nn.Module):
         self.teacher = teacher
         # 将教师模型设置为评估模式（不更新参数）
         self.teacher.eval()
+        # 冻结教师模型所有参数，不计算梯度也不占用优化器内存
+        # 如果不冻结，优化器会为7B参数创建momentum和variance状态（额外~56GB显存）
+        for param in self.teacher.parameters():
+            param.requires_grad = False
 
     def forward(self, student_input_ids, student_attention_mask, student_labels, teacher_input_ids, teacher_attention_mask, teacher_labels):
         """前向传播：同时运行学生和教师模型
