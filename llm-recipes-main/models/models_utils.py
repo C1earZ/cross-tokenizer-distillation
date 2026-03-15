@@ -73,19 +73,28 @@ def load_model(train_config, rank):
     def load():
         # 如果是MT0模型（多语言T5）
         if "mt0" in train_config.model_name:
+            kwargs = {
+                "use_cache": use_cache,
+            }
+            if train_config.quantization:
+                kwargs["load_in_8bit"] = True
+                kwargs["device_map"] = "auto"
             return MT5ForConditionalGeneration.from_pretrained(
                 train_config.model_name,
-                load_in_8bit=True if train_config.quantization else False,  # 是否使用8位量化
-                device_map="auto" if train_config.quantization else None,  # 自动设备映射
-                use_cache=use_cache,  # 是否使用KV缓存
+                **kwargs,
             )
         # 否则加载因果语言模型（如GPT、Llama）
         else:
+            # 新版transformers不再支持load_in_8bit直接传参，需通过BitsAndBytesConfig
+            kwargs = {
+                "use_cache": use_cache,
+            }
+            if train_config.quantization:
+                kwargs["load_in_8bit"] = True
+                kwargs["device_map"] = "auto"
             return AutoModelForCausalLM.from_pretrained(
                 train_config.model_name,
-                load_in_8bit=True if train_config.quantization else False,
-                device_map="auto" if train_config.quantization else None,
-                use_cache=use_cache,
+                **kwargs,
             )
 
     # 如果不启用FSDP，直接加载模型
