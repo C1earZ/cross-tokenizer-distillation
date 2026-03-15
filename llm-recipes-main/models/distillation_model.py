@@ -137,9 +137,11 @@ class DistillationLoss(nn.Module):
         返回:
             (total_loss, crossentropy_loss, distillation_loss): 总损失、交叉熵损失、蒸馏损失的元组"""
         # 提取学生模型的logits（未归一化的预测分数）
-        student = student_predictions.logits
-        # 提取教师模型的logits
-        teacher = teacher_predictions.logits
+        # clone() 避免 in-place 修改原始 logits 破坏 autograd 计算图
+        # 直接对 student_predictions.logits 做 in-place 操作会导致 backward 产生 NaN 梯度
+        student = student_predictions.logits.clone()
+        # 教师 logits 在 no_grad 下计算，clone 保持一致性
+        teacher = teacher_predictions.logits.clone()
 
         # 获取答案的起始位置和长度
         # 这是为了只对答案部分计算蒸馏损失，忽略提示部分
