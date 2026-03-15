@@ -38,6 +38,7 @@ pip install torch transformers datasets accelerate peft fire tqdm wandb evaluate
 ```
 
 > AutoDL 镜像通常预装了 PyTorch 和 CUDA，无需额外安装。选镜像时建议选带 PyTorch 2.x + CUDA 的版本。
+> **RTX 5090 用户**: Blackwell 架构需要 PyTorch >= 2.6 和 CUDA >= 12.8，请确认镜像版本。
 
 ### 0.4 HuggingFace 登录
 
@@ -65,13 +66,32 @@ huggingface-cli login
 | Step 3: 蒸馏训练 | ~18-24GB (bf16, batch=1) | RTX 3090 24G / RTX 4090 24G |
 | Step 4: 评测 | ~2GB (仅学生模型) | 任意 GPU |
 
+> **RTX 5090 32G**: 显存充足，Step 1 可用 `batch_size=4`，Step 3 可用 `batch_size_training=4`（`gradient_accumulation_steps` 相应调整为 2），训练速度大幅提升。
+
 > 如果只有 16G 显存（如 V100），Step 3 可能需要用 FSDP 多卡，或进一步减小 batch_size。
 
 ---
 
 ## 1. Step 1: 用教师模型生成 SQuAD 预测数据
 
-教师模型在 SQuAD 训练集上生成答案。**使用 batch_size=1 降低显存**：
+教师模型在 SQuAD 训练集上生成答案。
+
+**RTX 5090 32G**（显存充足，使用 `batch_size=4` 加速生成）：
+
+```bash
+cd ~/llm-distillation
+
+python datasets/generator.py \
+    --model_id meta-llama/Llama-2-7b-chat-hf \
+    --dataset_id squad \
+    --split_name train \
+    --task qa \
+    --number_few_shot 1 \
+    --batch_size 4 \
+    --bfloat
+```
+
+**其他显卡（24G 及以下）**，使用 `batch_size=1` 降低显存：
 
 ```bash
 cd ~/llm-distillation
@@ -124,9 +144,35 @@ cp -r datasets/generated/Llama-2-7b-chat-hf/squad/train ~/llm-distillation/datas
 
 ## 3. Step 3: 运行蒸馏训练（轻量配置）
 
-### 3.1 单卡运行（推荐，24G 显存）
+### 3.1 单卡运行（RTX 5090 32G，推荐）
 
-关键改动：`--dataset.training_size 0.1` 只使用 1/10 数据，`batch_size=1` 降低显存。
+32GB 显存可同时加载教师和学生模型，使用 `batch_size=4` 提升训练速度：
+
+```bash
+cd ~/llm-recipes
+
+python finetuning.py \
+    --model_name EleutherAI/pythia-410m-deduped \
+    --dataset.file ~/llm-distillation/datasets/loader/squad.py \
+    --dataset.generated_by meta-llama/Llama-2-7b-chat-hf \
+    --dataset.training_size 0.1 \
+    --lr 1e-6 \
+    --num_epochs 3 \
+    --batch_size_training 4 \
+    --val_batch_size 4 \
+    --gradient_accumulation_steps 2 \
+    --output_dir ~/llm-distillation/output/pythia-410m-squad \
+    --distillation \
+    --distillation_config.model_name meta-llama/Llama-2-7b-chat-hf \
+    --distillation_config.pure_bf16 \
+    --distillation_config.distil_factor 1.5 \
+    --distillation_config.cross_entropy_factor 1 \
+    --distillation_config.student_temperature 1 \
+    --distillation_config.teacher_temperature 1 \
+    --save_step 50
+```
+
+### 3.2 单卡运行（其他 24G 显卡）
 
 ```bash
 cd ~/llm-recipes
@@ -152,7 +198,7 @@ python finetuning.py \
     --save_step 50
 ```
 
-### 3.2 多卡 FSDP 运行（如果有多卡或单卡显存不够）
+### 3.3 多卡 FSDP 运行（如果有多卡或单卡显存不够）
 
 ```bash
 cd ~/llm-recipes
@@ -179,8 +225,8 @@ torchrun --nproc_per_node 2 finetuning.py \
 
 > **轻量版参数说明**:
 > - `dataset.training_size=0.1`: **只使用 1/10 的训练数据**（约 7.8k 条 → 约 780 条）
-> - `batch_size_training=1`: 最小 batch_size，显存友好
-> - `gradient_accumulation_steps=8`: 等效 batch_size=8，弥补小 batch 的不足
+> - RTX 5090: `batch_size_training=4` + `gradient_accumulation_steps=2` = 等效 batch_size 8
+> - 其他显卡: `batch_size_training=1` + `gradient_accumulation_steps=8` = 等效 batch_size 8
 > - `num_epochs=3`: 减少训练轮数，不追求精度
 > - `pure_bf16`: bf16 精度训练，显存减半
 > - `save_step=50`: 更频繁保存 checkpoint（数据少，总步数也少）
@@ -203,11 +249,13 @@ python benchmark.py \
     --split_name validation \
     --task qa \
     --number_few_shot 0 \
-    --batch_size 4 \
+    --batch_size 16 \
     --bfloat \
     --save_predictions \
     --output_path results/pythia-410m-squad/squad/untitled
 ```
+
+> 其他显卡使用 `--batch_size 4`。
 
 ### 4.2 用 SQuAD 官方指标重新评分（可选）
 
@@ -237,10 +285,12 @@ python benchmark.py \
     --split_name validation \
     --task qa \
     --number_few_shot 0 \
-    --batch_size 4 \
+    --batch_size 16 \
     --save_predictions \
     --output_path results/pythia-410m-deduped/squad/untitled
 ```
+
+> 其他显卡使用 `--batch_size 4`。
 
 ### 5.2 评测教师模型（上限参考，需要较大显存）
 
@@ -255,11 +305,13 @@ python benchmark.py \
     --split_name validation \
     --task qa \
     --number_few_shot 1 \
-    --batch_size 1 \
+    --batch_size 4 \
     --bfloat \
     --save_predictions \
     --output_path results/Llama-2-7b-chat-hf/squad/untitled
 ```
+
+> RTX 5090 32G 评测教师模型（~14GB）仍有充足余量，可使用 `--batch_size 4`；其他显卡使用 `--batch_size 1`。
 
 ### 5.3 预期结果对比（轻量版，仅供参考）
 
