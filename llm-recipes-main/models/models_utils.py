@@ -256,11 +256,14 @@ def get_optimizer(model, train_config, fsdp_config):
         fsdp_config: FSDP配置
     返回:
         optimizer: 优化器对象"""
+    # 蒸馏模式下只优化学生参数，避免为7B教师参数分配优化器状态（~56GB显存）
+    params = model.student.parameters() if hasattr(model, "student") else model.parameters()
+
     # 如果使用纯BF16且优化器类型为anyprecision
     if fsdp_config.pure_bf16 and fsdp_config.optimizer == "anyprecision":
         # 使用任意精度AdamW优化器（支持BF16动量和方差）
         return AnyPrecisionAdamW(
-            model.parameters(),
+            params,
             lr=train_config.lr,  # 学习率
             momentum_dtype=torch.bfloat16,  # 动量使用BF16
             variance_dtype=torch.bfloat16,  # 方差使用BF16
@@ -270,7 +273,7 @@ def get_optimizer(model, train_config, fsdp_config):
     # 否则使用标准AdamW优化器
     else:
         return optim.AdamW(
-            model.parameters(),
+            params,
             lr=train_config.lr,  # 学习率
             weight_decay=train_config.weight_decay,  # 权重衰减
         )
